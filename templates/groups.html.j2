@@ -1,0 +1,92 @@
+
+{% extends "base.html.j2" %}
+
+{% block content %}
+<div class="container py-4">
+    <h1>Community Groups</h1>
+    <p class="text-muted">
+        Find people with shared interests and become part of a community.
+    </p>
+
+    {% if session.get('user_id') %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5">Create a community group</h2>
+            <form method="POST" action="{{ url_for('groups') }}">
+                <div class="mb-3">
+                    <label for="name" class="form-label">Group name</label>
+                    <input type="text" class="form-control" id="name"
+                           name="name" maxlength="80" required
+                           placeholder="e.g. DIY Enthusiasts">
+                </div>
+
+                <div class="mb-3">
+                    <label for="description" class="form-label">Description</label>
+                    <textarea class="form-control" id="description"
+                              name="description" rows="3" required
+                              placeholder="What brings this group together?"></textarea>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    Create group
+                </button>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        <a href="{{ url_for('login') }}">Log in</a> to create or join a group.
+    </div>
+    {% endif %}
+
+    <h2 class="h4 mb-3">Explore groups</h2>
+
+    {% if groups %}
+        {% for group in groups %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h3 class="h5">{{ group['name'] }}</h3>
+                <p>{{ group['description'] }}</p>
+
+                <p class="small text-muted">
+                    Created by {{ group['username'] }}
+                    · Members: {{ group['member_count'] }}
+                </p>
+
+                {% if session.get('user_id') %}
+                    {% if group['id'] in my_groups %}
+                        <span class="badge text-bg-success">You're a member</span>
+                    {% else %}
+                        <form method="POST"
+                              action="{{ url_for('join_group', group_id=group['id']) }}">
+                            <button type="submit" class="btn btn-outline-primary btn-sm">
+                                Join group
+                            </button>
+                        </form>
+                    {% endif %}
+                {% endif %}
+
+                <hr>
+                <h4 class="h6">Group members</h4>
+
+                {% if members_by_group[group['id']] %}
+                    <ul class="mb-0">
+                        {% for member in members_by_group[group['id']] %}
+                            <li>{{ member['username'] }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="small text-muted mb-0">
+                        No members yet. Join this group to be the first!
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="text-muted">
+            No groups yet. Create the first community group!
+        </p>
+    {% endif %}
+</div>
+{% endblock %}

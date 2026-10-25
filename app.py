@@ -106,6 +106,38 @@ def init_challenges_tables():
         db.close()
 
 
+def init_groups_tables():
+    """Create tables for community groups and their members."""
+    db = sqlite3.connect(DATABASE)
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS community_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS group_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (group_id, user_id),
+                FOREIGN KEY (group_id) REFERENCES community_groups(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        db.commit()
+    finally:
+        db.close()
+
+
 def query_db(query, args=(), one=False, commit=False):
     """
     Queries the database and returns a list of dictionaries, a single
@@ -295,6 +327,104 @@ def help_board():
         title='Community Help Board',
         help_requests=help_requests
     )
+
+
+@app.route('/groups', methods=['GET', 'POST'])
+def groups():
+    """Display community groups and allow logged-in members to create them."""
+    user_id = session.get('user_id')
+
+    if request.method == 'POST':
+        if not user_id:
+            flash('Please log in to create a group.', 'warning')
+            return redirect(url_for('login'))
+
+        name = request.form.get('name', '').strip()
+        description = request.form.get('description', '').strip()
+
+        if not name or not description:
+            flash('Please enter a group name and description.', 'warning')
+        elif len(name) > 80:
+            flash('The group name must be 80 characters or fewer.', 'warning')
+        else:
+            db = get_db()
+            try:
+                db.execute(
+                    'INSERT INTO community_groups (name, description, created_by) '
+                    'VALUES (?, ?, ?)',
+                    (name, description, user_id)
+                )
+                db.commit()
+                flash('Your community group has been created!', 'success')
+                return redirect(url_for('groups'))
+            except sqlite3.IntegrityError:
+                flash('A group with that name already exists.', 'warning')
+
+    group_list = query_db("""
+        SELECT g.id, g.name, g.description, g.created_at, u.username,
+               COUNT(DISTINCT gm.user_id) AS member_count
+        FROM community_groups g
+        JOIN users u ON g.created_by = u.id
+        LEFT JOIN group_members gm ON gm.group_id = g.id
+        GROUP BY g.id
+        ORDER BY g.name COLLATE NOCASE
+    """)
+
+    my_group_rows = []
+    if user_id:
+        my_group_rows = query_db(
+            'SELECT group_id FROM group_members WHERE user_id = ?',
+            (user_id,)
+        )
+
+    my_groups = {row['group_id'] for row in my_group_rows}
+
+    members_by_group = {}
+    for group in group_list:
+        members = query_db("""
+            SELECT u.username
+            FROM group_members gm
+            JOIN users u ON u.id = gm.user_id
+            WHERE gm.group_id = ?
+            ORDER BY u.username COLLATE NOCASE
+        """, (group['id'],))
+        members_by_group[group['id']] = members
+
+    return render_template(
+        'groups.html.j2',
+        title='Community Groups',
+        groups=group_list,
+        my_groups=my_groups,
+        members_by_group=members_by_group
+    )
+
+
+@app.route('/groups/<int:group_id>/join', methods=['POST'])
+def join_group(group_id):
+    """Join a community group once."""
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('Please log in to join a group.', 'warning')
+        return redirect(url_for('login'))
+
+    group = query_db(
+        'SELECT id FROM community_groups WHERE id = ?',
+        (group_id,),
+        one=True
+    )
+    if group is None:
+        flash('Group not found.', 'warning')
+        return redirect(url_for('groups'))
+
+    db = get_db()
+    db.execute("""
+        INSERT OR IGNORE INTO group_members (group_id, user_id)
+        VALUES (?, ?)
+    """, (group_id, user_id))
+    db.commit()
+
+    flash('You have joined the group!', 'success')
+    return redirect(url_for('groups'))
 
 
 @app.route('/challenges', methods=['GET', 'POST'])
@@ -1164,10 +1294,13 @@ def recommend(user_id, filter_following):
 
 
 
+
 if __name__ == '__main__':
     init_help_requests_table()
     init_challenges_tables()
+    init_groups_tables()
     app.run(debug=True, port=8080)
+
 
 
 
