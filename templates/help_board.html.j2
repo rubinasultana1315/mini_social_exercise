@@ -1,0 +1,76 @@
+
+{% extends "base.html.j2" %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="mb-4">
+        <h1>Community Help Board</h1>
+        <p class="text-muted">
+            See what your community needs and find ways to contribute.
+        </p>
+    </div>
+
+    {% if session.get('user_id') %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5">Ask the community for help</h2>
+            <form method="POST" action="{{ url_for('help_board') }}">
+                <div class="mb-3">
+                    <label for="title" class="form-label">Request title</label>
+                    <input
+                        type="text"
+                        class="form-control"
+                        id="title"
+                        name="title"
+                        maxlength="100"
+                        required
+                        placeholder="e.g. Need feedback on my project">
+                </div>
+
+                <div class="mb-3">
+                    <label for="description" class="form-label">
+                        What help do you need?
+                    </label>
+                    <textarea
+                        class="form-control"
+                        id="description"
+                        name="description"
+                        rows="4"
+                        required
+                        placeholder="Describe what other members could contribute..."></textarea>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    Post help request
+                </button>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        <a href="{{ url_for('login') }}">Log in</a> to post a help request.
+    </div>
+    {% endif %}
+
+    <h2 class="h4 mb-3">Requests from the community</h2>
+
+    {% if help_requests %}
+        {% for item in help_requests %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <h3 class="h5">{{ item['title'] }}</h3>
+                <p class="mb-2">{{ item['description'] }}</p>
+                <div class="text-muted small">
+                    Posted by {{ item['username'] }}
+                    · {{ item['created_at'] }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="text-muted">
+            No help requests yet. Be the first to ask the community!
+        </p>
+    {% endif %}
+</div>
+{% endblock %}

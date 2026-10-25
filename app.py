@@ -52,6 +52,26 @@ def close_connection(exception):
         db.close()
 
 
+def init_help_requests_table():
+    """Create the help requests table if it does not exist yet."""
+    db = sqlite3.connect(DATABASE)
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS help_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        db.commit()
+    finally:
+        db.close()
+
+
+
 def query_db(query, args=(), one=False, commit=False):
     """
     Queries the database and returns a list of dictionaries, a single
@@ -200,6 +220,48 @@ def feed():
                            per_page=POSTS_PER_PAGE, # Pass items per page
                            reaction_emojis=REACTION_EMOJIS,
                            reaction_types=REACTION_TYPES)
+
+@app.route('/help-board', methods=['GET', 'POST'])
+def help_board():
+    """Show community help requests and allow logged-in members to add one."""
+    user_id = session.get('user_id')
+
+    if request.method == 'POST':
+        if not user_id:
+            flash('Please log in to create a help request.', 'warning')
+            return redirect(url_for('login'))
+
+        title = request.form.get('title', '').strip()
+        description = request.form.get('description', '').strip()
+
+        if not title or not description:
+            flash('Please enter both a title and a description.', 'warning')
+        elif len(title) > 100:
+            flash('The title must be 100 characters or fewer.', 'warning')
+        else:
+            db = get_db()
+            db.execute(
+                'INSERT INTO help_requests (user_id, title, description) '
+                'VALUES (?, ?, ?)',
+                (user_id, title, description)
+            )
+            db.commit()
+            flash('Your help request has been posted!', 'success')
+            return redirect(url_for('help_board'))
+
+    help_requests = query_db("""
+        SELECT h.id, h.title, h.description, h.created_at, u.username
+        FROM help_requests h
+        JOIN users u ON h.user_id = u.id
+        ORDER BY h.created_at DESC, h.id DESC
+    """)
+
+    return render_template(
+        'help_board.html.j2',
+        title='Community Help Board',
+        help_requests=help_requests
+    )
+
 
 @app.route('/posts/new', methods=['POST'])
 def add_post():
@@ -938,6 +1000,9 @@ def recommend(user_id, filter_following):
 
     return recommended_posts;
 
+
 if __name__ == '__main__':
+    init_help_requests_table()
     app.run(debug=True, port=8080)
+
 
