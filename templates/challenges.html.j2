@@ -1,0 +1,115 @@
+
+{% extends "base.html.j2" %}
+
+{% block content %}
+<div class="container py-4">
+    <h1>Community Challenges</h1>
+    <p class="text-muted">
+        Set clear goals, contribute to the community, and track your progress.
+    </p>
+
+    {% if session.get('user_id') %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h2 class="h5">Create a challenge</h2>
+            <form method="POST" action="{{ url_for('challenges') }}">
+                <div class="mb-3">
+                    <label for="title" class="form-label">Challenge title</label>
+                    <input type="text" class="form-control" id="title"
+                           name="title" maxlength="100" required
+                           placeholder="e.g. Share 3 helpful tips">
+                </div>
+
+                <div class="mb-3">
+                    <label for="description" class="form-label">Description</label>
+                    <textarea class="form-control" id="description"
+                              name="description" rows="3" required
+                              placeholder="What should participants do?"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="goal" class="form-label">Target number</label>
+                    <input type="number" class="form-control" id="goal"
+                           name="goal" min="1" max="10000" required
+                           placeholder="e.g. 3">
+                    <div class="form-text">
+                        Choose a clear, measurable target.
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    Create challenge
+                </button>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        <a href="{{ url_for('login') }}">Log in</a> to create or join challenges.
+    </div>
+    {% endif %}
+
+    <h2 class="h4 mb-3">Available challenges</h2>
+
+    {% if challenges %}
+        {% for challenge in challenges %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h3 class="h5">{{ challenge['title'] }}</h3>
+                <p>{{ challenge['description'] }}</p>
+                <p class="small text-muted">
+                    Created by {{ challenge['username'] }}
+                    · Target: {{ challenge['goal'] }}
+                    · Participants: {{ challenge['participant_count'] }}
+                </p>
+
+                {% if session.get('user_id') %}
+                    {% if challenge['id'] in my_progress %}
+                        {% set progress = my_progress[challenge['id']] %}
+                        {% set percent = ((progress * 100) // challenge['goal']) %}
+                        {% if percent > 100 %}
+                            {% set percent = 100 %}
+                        {% endif %}
+
+                        <p class="mb-1">
+                            Your progress: {{ progress }} / {{ challenge['goal'] }}
+                        </p>
+                        <div class="progress mb-3" role="progressbar"
+                             aria-label="Your challenge progress"
+                             aria-valuenow="{{ percent }}"
+                             aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-bar"
+                                 style="width: {{ percent }}%">
+                                {{ percent }}%
+                            </div>
+                        </div>
+
+                        {% if progress < challenge['goal'] %}
+                        <form method="POST"
+                              action="{{ url_for('update_challenge_progress', challenge_id=challenge['id']) }}">
+                            <button type="submit" class="btn btn-success btn-sm">
+                                Record one contribution
+                            </button>
+                        </form>
+                        {% else %}
+                        <span class="badge text-bg-success">Goal completed!</span>
+                        {% endif %}
+                    {% else %}
+                        <form method="POST"
+                              action="{{ url_for('join_challenge', challenge_id=challenge['id']) }}">
+                            <button type="submit" class="btn btn-outline-primary">
+                                Join challenge
+                            </button>
+                        </form>
+                    {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="text-muted">
+            No challenges yet. Create the first one!
+        </p>
+    {% endif %}
+</div>
+{% endblock %}

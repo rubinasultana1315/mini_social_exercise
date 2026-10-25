@@ -71,6 +71,40 @@ def init_help_requests_table():
         db.close()
 
 
+def init_challenges_tables():
+    """Create tables for community challenges and participant progress."""
+    db = sqlite3.connect(DATABASE)
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS challenges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                goal INTEGER NOT NULL CHECK (goal > 0),
+                created_by INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+        """)
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS challenge_participants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                challenge_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0
+                    CHECK (progress >= 0),
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (challenge_id, user_id),
+                FOREIGN KEY (challenge_id) REFERENCES challenges(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        db.commit()
+    finally:
+        db.close()
+
 
 def query_db(query, args=(), one=False, commit=False):
     """
@@ -261,6 +295,134 @@ def help_board():
         title='Community Help Board',
         help_requests=help_requests
     )
+
+
+@app.route('/challenges', methods=['GET', 'POST'])
+def challenges():
+    """List community challenges and allow members to create them."""
+    user_id = session.get('user_id')
+
+    if request.method == 'POST':
+        if not user_id:
+            flash('Please log in to create a challenge.', 'warning')
+            return redirect(url_for('login'))
+
+        title = request.form.get('title', '').strip()
+        description = request.form.get('description', '').strip()
+        goal_text = request.form.get('goal', '').strip()
+
+        try:
+            goal = int(goal_text)
+        except ValueError:
+            goal = 0
+
+        if not title or not description:
+            flash('Please enter a title and description.', 'warning')
+        elif len(title) > 100:
+            flash('The title must be 100 characters or fewer.', 'warning')
+        elif goal < 1 or goal > 10000:
+            flash('The goal must be between 1 and 10000.', 'warning')
+        else:
+            db = get_db()
+            db.execute(
+                'INSERT INTO challenges '
+                '(title, description, goal, created_by) VALUES (?, ?, ?, ?)',
+                (title, description, goal, user_id)
+            )
+            db.commit()
+            flash('Your challenge has been created!', 'success')
+            return redirect(url_for('challenges'))
+
+    challenge_list = query_db("""
+        SELECT c.id, c.title, c.description, c.goal, c.created_at,
+               u.username,
+               COUNT(DISTINCT cp.user_id) AS participant_count
+        FROM challenges c
+        JOIN users u ON c.created_by = u.id
+        LEFT JOIN challenge_participants cp ON cp.challenge_id = c.id
+        GROUP BY c.id
+        ORDER BY c.created_at DESC, c.id DESC
+    """)
+
+    my_progress_rows = []
+    if user_id:
+        my_progress_rows = query_db("""
+            SELECT challenge_id, progress
+            FROM challenge_participants
+            WHERE user_id = ?
+        """, (user_id,))
+
+    my_progress = {
+        row['challenge_id']: row['progress']
+        for row in my_progress_rows
+    }
+
+    return render_template(
+        'challenges.html.j2',
+        title='Community Challenges',
+        challenges=challenge_list,
+        my_progress=my_progress
+    )
+
+
+@app.route('/challenges/<int:challenge_id>/join', methods=['POST'])
+def join_challenge(challenge_id):
+    """Allow a member to join a challenge once."""
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('Please log in to join a challenge.', 'warning')
+        return redirect(url_for('login'))
+
+    challenge = query_db(
+        'SELECT id FROM challenges WHERE id = ?',
+        (challenge_id,),
+        one=True
+    )
+    if challenge is None:
+        flash('Challenge not found.', 'warning')
+        return redirect(url_for('challenges'))
+
+    db = get_db()
+    db.execute("""
+        INSERT OR IGNORE INTO challenge_participants
+            (challenge_id, user_id, progress)
+        VALUES (?, ?, 0)
+    """, (challenge_id, user_id))
+    db.commit()
+    flash('You have joined the challenge!', 'success')
+    return redirect(url_for('challenges'))
+
+
+@app.route('/challenges/<int:challenge_id>/progress', methods=['POST'])
+def update_challenge_progress(challenge_id):
+    """Increase the logged-in member's progress by one."""
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('Please log in to update progress.', 'warning')
+        return redirect(url_for('login'))
+
+    db = get_db()
+    participant = query_db("""
+        SELECT cp.progress, c.goal
+        FROM challenge_participants cp
+        JOIN challenges c ON c.id = cp.challenge_id
+        WHERE cp.challenge_id = ? AND cp.user_id = ?
+    """, (challenge_id, user_id), one=True)
+
+    if participant is None:
+        flash('Join the challenge before updating your progress.', 'warning')
+    elif participant['progress'] >= participant['goal']:
+        flash('You have already reached this challenge goal!', 'info')
+    else:
+        db.execute("""
+            UPDATE challenge_participants
+            SET progress = progress + 1
+            WHERE challenge_id = ? AND user_id = ?
+        """, (challenge_id, user_id))
+        db.commit()
+        flash('Your challenge progress has been updated!', 'success')
+
+    return redirect(url_for('challenges'))
 
 
 @app.route('/posts/new', methods=['POST'])
@@ -1001,8 +1163,11 @@ def recommend(user_id, filter_following):
     return recommended_posts;
 
 
+
 if __name__ == '__main__':
     init_help_requests_table()
+    init_challenges_tables()
     app.run(debug=True, port=8080)
+
 
 
