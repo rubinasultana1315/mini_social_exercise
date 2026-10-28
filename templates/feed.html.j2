@@ -76,7 +76,16 @@
         {% endif %}
       </div>
       
+      
       <p class="mt-2">{{ entry.post.content }}</p>
+
+      {% if entry.post.moderation_label %}
+      <div class="alert alert-warning py-2 mt-2 mb-2" role="alert">
+        <strong>⚠ Moderation notice:</strong>
+        {{ entry.post.moderation_label }}
+      </div>
+      {% endif %}
+
 
       <!-- Reactions Display and Add Reaction Button -->
       <div class="d-flex align-items-center mt-2 mb-2">
@@ -140,6 +149,13 @@
             <div>
               <strong><a href="/u/{{ comment.username }}">{{ user_display(comment.username) }}</a></strong>
               <p class="mb-0">{{ comment.content }}</p>
+
+              {% if comment.moderation_label %}
+              <div class="alert alert-warning py-1 mt-2 mb-0" role="alert">
+                <strong>⚠ Moderation notice:</strong>
+                {{ comment.moderation_label }}
+              </div>
+              {% endif %}
             </div>
             
             {% if session.get('user_id') == comment.user_id or session.get('user_id') == entry.post.user_id %}

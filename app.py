@@ -176,13 +176,31 @@ def feed():
 
         reactions = query_db('SELECT reaction_type, COUNT(*) as count FROM reactions WHERE post_id = ? GROUP BY reaction_type', (post['id'],))
         comments_raw = query_db('SELECT c.id, c.content, c.created_at, u.username, u.id as user_id FROM comments c JOIN users u ON c.user_id = u.id WHERE c.post_id = ? ORDER BY c.created_at ASC', (post['id'],))
+       
         post_dict = dict(post)
-        post_dict['content'], _ = moderate_content(post_dict['content'])
+
+        # Moderate the post and keep its score for the warning label.
+        post_dict['content'], post_score = moderate_content(post_dict['content'])
+        post_dict['moderation_score'] = post_score
+        post_dict['moderation_label'] = (
+            'Content moderated' if post_score > 0 else None
+        )
+
         comments_moderated = []
         for comment in comments_raw:
             comment_dict = dict(comment)
-            comment_dict['content'], _ = moderate_content(comment_dict['content'])
+
+            # Moderate the comment and keep its score.
+            comment_dict['content'], comment_score = moderate_content(
+                comment_dict['content']
+            )
+            comment_dict['moderation_score'] = comment_score
+            comment_dict['moderation_label'] = (
+                'Content moderated' if comment_score > 0 else None
+            )
+
             comments_moderated.append(comment_dict)
+
         posts_data.append({
             'post': post_dict,
             'reactions': reactions,
@@ -872,45 +890,143 @@ def loop_color(user_id):
 # Assignment 2.2
 def user_risk_analysis(user_id):
     """
-    Args:
-        user_id: The ID of the user on which we perform risk analysis.
-
-    Returns:
-        A float number score showing the risk associated with this user. There are no strict rules or bounds to this score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk. (An upper bound of 5.0 is applied to this score elsewhere in the codebase) 
-        
-        You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-        Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
+    Calculate a risk score from the user's profile, posts, comments,
+    and account age.
     """
-    
-    score = 0
+    user = query_db(
+        "SELECT id, profile, created_at FROM users WHERE id = ?",
+        (user_id,),
+        one=True
+    )
 
-    return score;
+    if not user:
+        return 0.0
 
+    # Risk from the user's profile.
+    _, profile_score = moderate_content(user["profile"] or "")
+
+    # Average risk from the user's posts.
+    posts = query_db(
+        "SELECT content FROM posts WHERE user_id = ?",
+        (user_id,)
+    )
+
+    post_scores = [
+        moderate_content(post["content"])[1]
+        for post in posts
+    ]
+    average_post_score = (
+        sum(post_scores) / len(post_scores) if post_scores else 0.0
+    )
+
+    # Average risk from the user's comments.
+    comments = query_db(
+        "SELECT content FROM comments WHERE user_id = ?",
+        (user_id,)
+    )
+
+    comment_scores = [
+        moderate_content(comment["content"])[1]
+        for comment in comments
+    ]
+    average_comment_score = (
+        sum(comment_scores) / len(comment_scores)
+        if comment_scores else 0.0
+    )
+
+    # Combine the scores using the assignment's formula.
+    score = (
+        profile_score
+        + (average_post_score * 3)
+        + average_comment_score
+    )
+
+    # Apply the account-age multiplier.
+    created_at = user["created_at"]
+
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at)
+        except ValueError:
+            created_at = datetime.strptime(
+                created_at, "%Y-%m-%d %H:%M:%S"
+            )
+
+    # Handle timezone-aware timestamps safely.
+    now = datetime.now(created_at.tzinfo) if created_at.tzinfo else datetime.now()
+    account_age_days = (now - created_at).days
+
+    if account_age_days < 7:
+        score *= 1.5
+    elif account_age_days < 30:
+        score *= 1.2
+
+    # Keep the final user risk score within the required 0–5 range.
+    return float(min(5.0, max(0.0, score)))
     
 # Assignment 2.1
 def moderate_content(content):
     """
-    Args
-        content: the text content of a post or comment to be moderated.
-        
-    Returns: 
-        A tuple containing the moderated content (string) and a severity score (float). There are no strict rules or bounds to the severity score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk.
-    
-    This function moderates a string of content and calculates a severity score based on
-    rules loaded from the 'censorship.dat' file. These are already loaded as TIER1_WORDS, TIER2_PHRASES and TIER3_WORDS. Tier 1 corresponds to strong profanity, Tier 2 to scam/spam phrases and Tier 3 to mild profanity.
-    
-    You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-    Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
+    Filter content according to the loaded moderation rules.
+    Returns (moderated_content, risk_score).
     """
+    if content is None:
+        return "", 0.0
 
-    moderated_content = content
-    score = 0
-    
-    return moderated_content, score
+    moderated_content = str(content)
+    score = 0.0
+    text_lower = moderated_content.lower()
+
+    # Tier 1: severe violations remove the entire content.
+    for word in TIER1_WORDS:
+        pattern = r"\b" + re.escape(word) + r"\b"
+        if re.search(pattern, text_lower, flags=re.IGNORECASE):
+            return "[content removed due to severe violation]", 5.0
+
+    # Tier 2: spam/scam phrases also remove the entire content.
+    for phrase in TIER2_PHRASES:
+        if phrase.lower() in text_lower:
+            return "[content removed due to spam/scam policy]", 5.0
+
+    # Tier 3: censor each whole-word match and add 2 points.
+    for word in TIER3_WORDS:
+        pattern = r"\b" + re.escape(word) + r"\b"
+
+        matches = list(re.finditer(
+            pattern, moderated_content, flags=re.IGNORECASE
+        ))
+        score += 2.0 * len(matches)
+
+        moderated_content = re.sub(
+            pattern,
+            lambda match: "*" * len(match.group(0)),
+            moderated_content,
+            flags=re.IGNORECASE
+        )
+
+    # Remove external URLs and add 2 points per detected URL.
+    url_pattern = r"https?://[^\s]+|www\.[^\s]+"
+    urls = re.findall(url_pattern, moderated_content, flags=re.IGNORECASE)
+    score += 2.0 * len(urls)
+
+    moderated_content = re.sub(
+        url_pattern,
+        "[link removed]",
+        moderated_content,
+        flags=re.IGNORECASE
+    )
+
+    # Excessive capitals: more than 15 letters and over 70% uppercase.
+    letters = [char for char in moderated_content if char.isalpha()]
+
+    if len(letters) > 15:
+        uppercase_count = sum(char.isupper() for char in letters)
+        uppercase_ratio = uppercase_count / len(letters)
+
+        if uppercase_ratio > 0.70:
+            score += 0.5
+
+    return moderated_content, float(score)
 
 # Coding Assignment #3
 # Assignment 3.1
