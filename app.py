@@ -110,7 +110,41 @@ def feed():
     offset = (page - 1) * POSTS_PER_PAGE
 
     current_user_id = session.get('user_id')
+    is_new_user = False
+    profile_complete = False
+    following_someone = False
+    has_posted = False
+
+    if current_user_id:
+        user = query_db(
+        'SELECT created_at, profile FROM users WHERE id = ?',
+        (current_user_id,),
+        one=True
+        )
+
+        if user and user['created_at']:
+            is_new_user = (datetime.utcnow() - user['created_at']).days < 7
+
+            if user and user['profile']:
+                        profile_complete = True  
+                        following_someone = query_db(
+                            'SELECT id FROM follows WHERE follower_id = ?',
+                            (current_user_id,),
+                            one=True
+                            ) is not None
+                        has_posted = query_db(
+                            'SELECT id FROM posts WHERE user_id = ?',
+                            (current_user_id,),
+                            one=True
+                            ) is not None
+                        
     params = []
+    welcome_members = []
+    if current_user_id:
+        welcome_members = query_db(
+            'SELECT id, username FROM users WHERE id != ? ORDER BY created_at DESC LIMIT 5',
+            (current_user_id,)
+            )
 
     #  2. Build the Query 
     where_clause = ""
@@ -137,7 +171,11 @@ def feed():
         final_params = params + list(pagination_params)
         posts = query_db(query, final_params)
     elif sort == 'recommended':
-        posts = recommend(current_user_id, show == 'following' and current_user_id)
+        posts_data = recommend(
+        current_user_id,
+        show == 'following' and bool(current_user_id)
+        )
+        posts = None
     else:  # Default sort is 'new'
         query = f"""
             SELECT p.id, p.content, p.created_at, u.username, u.id as user_id
@@ -150,8 +188,9 @@ def feed():
         final_params = params + list(pagination_params)
         posts = query_db(query, final_params)
 
-    posts_data = []
-    for post in posts:
+    if sort != 'recommended': 
+        posts_data = []
+    for post in (posts or []):
         # Determine if the current user follows the poster
         followed_poster = False
         if current_user_id and post['user_id'] != current_user_id:
@@ -199,7 +238,13 @@ def feed():
                            page=page, # Pass current page number
                            per_page=POSTS_PER_PAGE, # Pass items per page
                            reaction_emojis=REACTION_EMOJIS,
-                           reaction_types=REACTION_TYPES)
+                           reaction_types=REACTION_TYPES,
+                           is_new_user=is_new_user,
+                           welcome_members=welcome_members,
+                           profile_complete=profile_complete,
+                           following_someone=following_someone,
+                           has_posted=has_posted
+                           )
 
 @app.route('/posts/new', methods=['POST'])
 def add_post():
@@ -915,28 +960,134 @@ def moderate_content(content):
 # Coding Assignment #3
 # Assignment 3.1
 def recommend(user_id, filter_following):
+    
     """
-    Args:
-        user_id: The ID of the current user.
-        filter_following: Boolean, True if we only want to see recommendations from followed users.
-
-    Returns:
-        A list of 5 recommended posts, in reverse-chronological order.
-
-    To test whether your recommendation algorithm works, let's pretend we like the DIY topic. Here are some users that often post DIY comment and a few example posts. Make sure your account did not engage with anything else. You should test your algorithm with these and see if your recommendation algorithm picks up on your interest in DIY and starts showing related content.
-    
-    Users: @starboy99, @DancingDolphin, @blogger_bob
-    Posts: 1810, 1875, 1880, 2113
-    
-    Materials: 
-    - https://www.nvidia.com/en-us/glossary/recommendation-system/
-    - http://www.configworks.com/mz/handout_recsys_sac2010.pdf
-    - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
+    Recommend up to five posts using topics from posts the user
+    reacted positively to. If filter_following is True, only include
+    posts written by users the current user follows.
     """
 
-    recommended_posts = {} 
+    positive_reactions = ('like', 'love', 'haha', 'laugh','wow')
 
-    return recommended_posts;
+    # Find posts the user reacted positively to.
+    liked_posts = query_db(
+        """
+        SELECT p.content
+        FROM posts p
+        JOIN reactions r ON r.post_id = p.id
+        WHERE r.user_id = ?
+          AND r.reaction_type IN (?, ?, ?, ?, ?)
+        """,
+        (user_id, *positive_reactions)
+    )
+
+    # Extract useful keywords from those posts.
+    stop_words = {
+        'the', 'and', 'for', 'that', 'this', 'with', 'you', 'your',
+        'are', 'was', 'but', 'not', 'have', 'from', 'they', 'about',
+        'just', 'like', 'what', 'when', 'how', 'its', 'our', 'can',
+        'all', 'into', 'out', 'get', 'got', 'has', 'had', 'who'
+    }
+
+    interest_words = set()
+    for liked_post in liked_posts:
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', liked_post['content'].lower())
+        interest_words.update(word for word in words if word not in stop_words)
+
+    # Get candidate posts, excluding the user's own posts.
+    if filter_following:
+        candidate_posts = query_db(
+            """
+            SELECT p.id, p.content, p.created_at, u.username,
+                   u.id AS user_id
+            FROM posts p
+            JOIN users u ON u.id = p.user_id
+            JOIN follows f ON f.followed_id = p.user_id
+            WHERE f.follower_id = ?
+              AND p.user_id != ?
+              AND p.id NOT IN (
+              SELECT post_id FROM reactions WHERE user_id = ?
+              )
+            """,
+            ((user_id, user_id, user_id))
+        )
+    else:
+        candidate_posts = query_db(
+            """
+            SELECT p.id, p.content, p.created_at, u.username,
+                   u.id AS user_id
+            FROM posts p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.user_id != ?
+            AND p.id NOT IN (
+            SELECT post_id FROM reactions WHERE user_id = ?
+            )
+            """,
+            (user_id, user_id)
+        )
+
+    # Score each candidate by how many interest keywords it contains.
+    # Score each candidate by how many interest keywords it contains.
+    scored_posts = []
+    for post in candidate_posts:
+     words = set(re.findall(r'\b[a-zA-Z]{3,}\b', post['content'].lower()))
+     score = len(words & interest_words)
+     # Keep only relevant posts; newer posts break ties.
+     if score > 0:
+        scored_posts.append((score, post['created_at'], dict(post)))
+
+# Prefer relevant posts, then newer posts.
+    scored_posts.sort(key=lambda item: (item[0], item[1] or ''), reverse=True)
+    selected_posts = [item[2] for item in scored_posts[:5]]
+
+    # Match the structure expected by feed.html.j2.
+    recommended_posts = []
+    for post in selected_posts:
+        user_reaction = query_db(
+            'SELECT reaction_type FROM reactions WHERE user_id = ? AND post_id = ?',
+            (user_id, post['id']),
+            one=True
+        )
+
+        reactions = query_db(
+            'SELECT reaction_type, COUNT(*) as count FROM reactions WHERE post_id = ? GROUP BY reaction_type',
+            (post['id'],)
+        )
+
+        comments_raw = query_db(
+            """
+            SELECT c.id, c.content, c.created_at, u.username,
+                   u.id AS user_id
+            FROM comments c
+            JOIN users u ON u.id = c.user_id
+            WHERE c.post_id = ?
+            ORDER BY c.created_at ASC
+            """,
+            (post['id'],)
+        )
+
+        post['content'], _ = moderate_content(post['content'])
+        comments_moderated = []
+        for comment in comments_raw:
+            comment_dict = dict(comment)
+            comment_dict['content'], _ = moderate_content(comment_dict['content'])
+            comments_moderated.append(comment_dict)
+
+        followed_poster = query_db(
+            'SELECT 1 FROM follows WHERE follower_id = ? AND followed_id = ?',
+            (user_id, post['user_id']),
+            one=True
+        ) is not None
+
+        recommended_posts.append({
+            'post': post,
+            'reactions': reactions,
+            'user_reaction': user_reaction['reaction_type'] if user_reaction else None,
+            'followed_poster': followed_poster,
+            'comments': comments_moderated
+        })
+
+    return recommended_posts
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

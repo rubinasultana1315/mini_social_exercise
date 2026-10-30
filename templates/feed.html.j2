@@ -36,6 +36,44 @@
 
   <!-- This is the 'show' filter for All / Following -->
   <!-- Following is only shown to logged in users -->
+  {% if is_new_user %}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card border-primary shadow-sm">
+    <div class="card-body">
+      <h5 class="card-title">Welcome to the community!</h5>
+      <p>Here are three steps to help you get started:</p>
+      <div class="text-start d-inline-block">
+      <ul class="mb-0">
+        <li>{% if profile_complete %}✅{% else %}⬜{% endif %} Complete your profile so others can get to know you.</li>
+        <li>{% if following_someone %}✅{% else %}⬜{% endif %} Follow another member to see their posts.</li>
+        <li>{% if has_posted %}✅{% else %}⬜{% endif %} Write your first post and introduce yourself!</li>
+      </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% if is_new_user and welcome_members %}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h5 class="card-title">Meet our community!</h5>
+      <p>Connect with these members and say hello:</p>
+      <div class="text-start d-inline-block">
+      <ul>
+        {% for member in welcome_members %}
+        <li>
+          <a href="{{ url_for('user_profile', username=member['username']) }}">
+            @{{ member['username'] }}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
   {% if session.get('user_id') %}
   <div class="btn-group" role="group" aria-label="Filter posts">
     <!-- The link preserves the current_sort state -->
